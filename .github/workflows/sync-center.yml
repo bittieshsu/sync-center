@@ -1,4 +1,4 @@
-name: Ultimate Stealth Sync Center V3.5
+name: Ultimate Stealth Sync Center V4
 
 on:
   schedule:
@@ -18,104 +18,105 @@ jobs:
         run: |
           # 1. 驗證並登入 GitHub CLI
           if [ -z "${{ secrets.YOUR_CUSTOM_PAT }}" ]; then
-            echo "❌ 錯誤：找不到 YOUR_CUSTOM_PAT"
+            echo "錯誤：找不到 YOUR_CUSTOM_PAT"
             exit 1
           fi
           echo "${{ secrets.YOUR_CUSTOM_PAT }}" | gh auth login --with-token
 
-          echo "🔍 Step 1: 正在動態抓取您帳號下所有的 Fork 倉庫清單..."
+          echo "=== 開始檢查所有 Fork 專案 ==="
           REPOS=$(gh repo list --fork --limit 100 --json nameWithOwner --jq '.[].nameWithOwner')
 
           if [ -z "$REPOS" ]; then
-            echo "ℹ️ 您的帳號下目前沒有任何 Fork 倉庫。"
+            echo "帳號下目前沒有任何 Fork 專案。"
             exit 0
           fi
 
           TOTAL_COUNT=$(echo "$REPOS" | wc -l)
-          echo "總共偵測到 ${TOTAL_COUNT} 個需要巡邏的專案。"
-          echo "=========================================================="
+          echo "總共偵測到 $TOTAL_COUNT 個專案，開始處理..."
+          echo "=========================================="
 
-          # 2. 開始低調巡邏
-          echo "$REPOS" | while read -r TGT_REPO; do
+          # 🌟 使用 <<< 防止標準輸入被內部指令劫持，徹底解決日誌亂碼/漏字問題
+          while read -r TGT_REPO; do
             if [ -z "$TGT_REPO" ]; then continue; fi
 
-            echo "🚀 正在處理目標專案: $TGT_REPO"
+            echo "[專案] $TGT_REPO"
             
             SRC_REPO=$(gh api "repos/$TGT_REPO" --jq '.parent.full_name' 2>/dev/null || echo "")
             if [ -z "$SRC_REPO" ] || [ "$SRC_REPO" = "null" ]; then
-              echo "⚠️ 無法取得 $TGT_REPO 的原作者資訊，跳過。"
-              echo "----------------------------------------------------------"
+              echo "  -> 找不到原作者倉庫資訊，跳過。"
+              echo "------------------------------------------"
               continue
             fi
 
-            # ── A. 後台分支同步（零 Clone 模式） ──
-            echo "🔄 正在通知 GitHub 總部進行後台分支同步..."
+            # A. 後台分支同步（不下載程式碼）
             if gh repo sync "$TGT_REPO" >/dev/null 2>&1; then
-              echo "✅ 程式碼後台同步完成。"
+              echo "  -> 程式碼同步：成功"
             else
-              echo "❌ 同步失敗，跳過此專案。"
-              echo "----------------------------------------------------------"
+              echo "  -> 程式碼同步：失敗（可能有衝突或分支不同），跳過。"
+              echo "------------------------------------------"
               continue
             fi
 
-            # ── 🌟 B. 智慧擠牙膏：掃描一年內，每次「最多只補一版」 ──
-            echo "📦 正在掃描歷史 Release 清單..."
-            
-            # 撈取最近 50 筆 Release（涵蓋一年內的所有可能變動）
+            # B. 檢查並抓取 Release
             RELEASE_JSON=$(gh release list --repo "$SRC_REPO" --limit 50 --json tagName,publishedAt 2>/dev/null || echo "[]")
             
-            if [ "$RELEASE_JSON" != "[]" ] && [ -n "$RELEASE_JSON" ]; then
-              ONE_YEAR_AGO=$(date -d "1 year ago" +%s)
-              
-              # 【核心魔術】用 tac 把清單反轉，讓機器人「從最舊的歷史」依序往最新檢查
-              #echo "$RELEASE_JSON" | jq -c '.[]' | tac | while read -r row; do
-              # 拿掉 | tac (最新往舊)
-              echo "$RELEASE_JSON" | jq -c '.[]' | while read -r row; do
-                TAG=$(echo "$row" | jq -r '.tagName')
-                PUB_DATE=$(echo "$row" | jq -r '.publishedAt')
-                
-                # 1. 過濾時間：超過一年的老古董直接不要
-                PUB_SEC=$(date -d "$PUB_DATE" +%s 2>/dev/null || echo 0)
-                if [ "$PUB_SEC" -lt "$ONE_YEAR_AGO" ]; then
-                  continue
-                fi
-                
-                # 2. 檢查你是否已經有了
-                if gh release view "$TAG" --repo "$TGT_REPO" >/dev/null 2>&1; then
-                  continue # 有了就看下一版
-                fi
-                
-                # 3. 走到這裡，代表這版在「一年內」且「你竟然漏掉了」！立刻啟動搬運
-                echo "➕ 偵測到一年內未同步的歷史版本: $TAG，開始安全搬運..."
-                
-                rm -rf sync-assets && mkdir -p sync-assets
-                
-                if ! timeout 2m gh release download "$TAG" --repo "$SRC_REPO" --dir sync-assets >/dev/null 2>&1; then
-                  echo "⚠️ 下載附件超時，嘗試僅建立文字公告..."
-                fi
-                
-                TITLE=$(gh release view "$TAG" --repo "$SRC_REPO" --json name --template '{{.name}}' 2>/dev/null || echo "$TAG")
-                gh release view "$TAG" --repo "$SRC_REPO" --json body --template '{{.body}}' 2>/dev/null > release-note.txt || echo "No description" > release-note.txt
+            if [ -z "$RELEASE_JSON" ] || [ "$RELEASE_JSON" = "null" ] || [ "$RELEASE_JSON" = "[]" ]; then
+              echo "  -> Release狀態：原作者從未發布任何 Release"
+              echo "------------------------------------------"
+              continue
+            fi
+            
+            ONE_YEAR_AGO=$(date -d "1 year ago" +%s)
+            HAS_NEW_RELEASE=false
 
-                if [ "$(ls -A sync-assets 2>/dev/null)" ]; then
-                  timeout 2m gh release create "$TAG" sync-assets/* --repo "$TGT_REPO" --title "$TITLE" --notes-file release-note.txt >/dev/null 2>&1 || echo "❌ 建立 Release 失敗"
-                else
-                  timeout 2m gh release create "$TAG" --repo "$TGT_REPO" --title "$TITLE" --notes-file release-note.txt >/dev/null 2>&1 || echo "❌ 建立 Release 失敗"
-                fi
-                echo "🎉 Release $TAG 補課成功！"
-                rm -rf sync-assets release-note.txt
-                
-                # 🌟【終極防禦煞車】成功補完一版後，立刻 break 切斷迴圈！
-                # 多一版都不抓，把剩下的扣留到下一個小時再補，實現絕對安全的低調潛伏！
-                echo "🛑 [安全防禦機制觸發] 本小時此專案已達 1 版上限，剩餘未同步版本留待下小時處理。"
-                break
-              done
-            else
-              echo "ℹ️ 來源專案無任何 Release 可同步。"
+            # 預設從最新檢查到最舊，若想從最舊往新補，請在下方的 jq 後面加上 | tac
+            while read -r row; do
+              if [ -z "$row" ]; then continue; fi
+              
+              TAG=$(echo "$row" | jq -r '.tagName')
+              PUB_DATE=$(echo "$row" | jq -r '.publishedAt')
+              
+              # 1. 過濾時間：超過一年的不要
+              PUB_SEC=$(date -d "$PUB_DATE" +%s 2>/dev/null || echo 0)
+              if [ "$PUB_SEC" -lt "$ONE_YEAR_AGO" ]; then
+                continue
+              fi
+              
+              # 2. 檢查自己是不是有了
+              if gh release view "$TAG" --repo "$TGT_REPO" >/dev/null 2>&1; then
+                continue
+              fi
+              
+              # 3. 發現一年內有你缺少的版本，開始抓取
+              echo "  -> 發現未同步版本：$TAG (發布時間: $PUB_DATE)"
+              HAS_NEW_RELEASE=true
+              
+              rm -rf sync-assets && mkdir -p sync-assets
+              
+              if ! timeout 2m gh release download "$TAG" --repo "$SRC_REPO" --dir sync-assets >/dev/null 2>&1; then
+                echo "  -> [提示] 下載附件超時，僅同步文字公告"
+              fi
+              
+              TITLE=$(gh release view "$TAG" --repo "$SRC_REPO" --json name --template '{{.name}}' 2>/dev/null || echo "$TAG")
+              gh release view "$TAG" --repo "$SRC_REPO" --json body --template '{{.body}}' 2>/dev/null > release-note.txt || echo "No description" > release-note.txt
+
+              if [ "$(ls -A sync-assets 2>/dev/null)" ]; then
+                timeout 2m gh release create "$TAG" sync-assets/* --repo "$TGT_REPO" --title "$TITLE" --notes-file release-note.txt >/dev/null 2>&1
+              else
+                timeout 2m gh release create "$TAG" --repo "$TGT_REPO" --title "$TITLE" --notes-file release-note.txt >/dev/null 2>&1
+              fi
+              
+              echo "  -> Release同步：成功建立 $TAG"
+              echo "  -> [安全限制] 本小時已達 1 個版本上限，其餘版本留待下一次處理。"
+              rm -rf sync-assets release-note.txt
+              break # 🌟 核心關鍵：抓完這一個立刻踩煞車
+            done <<< "$(echo "$RELEASE_JSON" | jq -c '.[]' 2>/dev/null)"
+
+            if [ "$HAS_NEW_RELEASE" = false ]; then
+              echo "  -> Release狀態：已是最新狀態，無需更新"
             fi
 
-            echo "🏁 專案 $TGT_REPO 處理完畢！"
-            echo "----------------------------------------------------------"
-          done
+            echo "------------------------------------------"
+          done <<< "$REPOS"
 
-          echo "🏆 所有專案皆已低調巡邏完畢！"
+          echo "=== 所有專案全自動巡邏完畢 ==="
