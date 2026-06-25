@@ -1,0 +1,110 @@
+name: Ultimate Stealth Sync Center V3
+
+on:
+  schedule:
+    - cron: '0 * * * *' # 每小時自動巡邏
+  workflow_dispatch: # 允許手動觸發
+
+concurrency:
+  group: sync-center-group
+  cancel-in-progress: true
+
+jobs:
+  auto-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # 縮短整體限時，因為新版極快！
+    steps:
+      - name: Stealth Auto-Sync
+        run: |
+          # 1. 驗證並登入 GitHub CLI
+          if [ -z "${{ secrets.YOUR_CUSTOM_PAT }}" ]; then
+            echo "❌ 錯誤：找不到 YOUR_CUSTOM_PAT"
+            exit 1
+          fi
+          echo "${{ secrets.YOUR_CUSTOM_PAT }}" | gh auth login --with-token
+
+          echo "🔍 Step 1: 正在動態抓取您帳號下所有的 Fork 倉庫清單..."
+          REPOS=$(gh repo list --fork --limit 100 --json nameWithOwner --jq '.[].nameWithOwner')
+
+          if [ -z "$REPOS" ]; then
+            echo "ℹ️ 您的帳號下目前沒有任何 Fork 倉庫。"
+            exit 0
+          fi
+
+          TOTAL_COUNT=$(echo "$REPOS" | wc -l)
+          echo "總共偵測到 ${TOTAL_COUNT} 個需要巡邏的專案。"
+          echo "=========================================================="
+
+          # 2. 開始低調巡邏
+          echo "$REPOS" | while read -r TGT_REPO; do
+            if [ -z "$TGT_REPO" ]; then continue; fi
+
+            echo "🚀 正在處理目標專案: $TGT_REPO"
+            
+            SRC_REPO=$(gh api "repos/$TGT_REPO" --jq '.parent.full_name' 2>/dev/null || echo "")
+            if [ -z "$SRC_REPO" ] || [ "$SRC_REPO" = "null" ]; then
+              echo "⚠️ 無法取得 $TGT_REPO 的原作者資訊，跳過。"
+              echo "----------------------------------------------------------"
+              continue
+            fi
+
+            # ── 🌟 升級一：免下載！GitHub 官方後台直接對齊程式碼 ──
+            echo "🔄 正在通知 GitHub 總部進行後台分支同步..."
+            if gh repo sync "$TGT_REPO" >/dev/null 2>&1; then
+              echo "✅ 程式碼後台同步完成。"
+            else
+              echo "❌ 同步失敗（可能原作者改了主分支或有衝突），跳過此專案。"
+              echo "----------------------------------------------------------"
+              continue
+            fi
+
+            # ── 🌟 升級二：雙重過濾 Release（只抓最新 1 版 + 限 1 年內） ──
+            echo "📦 檢查最新 Release 中..."
+            
+            # 只撈最新 1 筆版本的 JSON 資料（包含標籤名稱與發布時間）
+            RELEASE_JSON=$(gh release list --repo "$SRC_REPO" --limit 1 --json tagName,publishedAt 2>/dev/null || echo "[]")
+            
+            if [ "$RELEASE_JSON" != "[]" ] && [ -n "$RELEASE_JSON" ]; then
+              TAG=$(echo "$RELEASE_JSON" | jq -r '.[0].tagName')
+              PUB_DATE=$(echo "$RELEASE_JSON" | jq -r '.[0].publishedAt')
+              
+              # 計算時間：把發布時間與「一年前的今天」都換算成秒數進行比較
+              PUB_SEC=$(date -d "$PUB_DATE" +%s 2>/dev/null || echo 0)
+              ONE_YEAR_AGO=$(date -d "1 year ago" +%s)
+              
+              if [ "$PUB_SEC" -lt "$ONE_YEAR_AGO" ]; then
+                echo "⏭️ 最新版本 $TAG 發布於 $PUB_DATE (已超過一年)，自動忽略。"
+              else
+                # 檢查你的倉庫是不是早就有了
+                if gh release view "$TAG" --repo "$TGT_REPO" >/dev/null 2>&1; then
+                  echo "⏭️ 最新版本 $TAG 您的倉庫已經有了，跳過。"
+                else
+                  echo "➕ 發現一年內未同步的最新 Release: $TAG，開始搬運..."
+                  
+                  rm -rf sync-assets && mkdir -p sync-assets
+                  
+                  if ! timeout 2m gh release download "$TAG" --repo "$SRC_REPO" --dir sync-assets >/dev/null 2>&1; then
+                    echo "⚠️ 下載附件超時，嘗試僅建立文字公告..."
+                  fi
+                  
+                  TITLE=$(gh release view "$TAG" --repo "$SRC_REPO" --json name --template '{{.name}}' 2>/dev/null || echo "$TAG")
+                  gh release view "$TAG" --repo "$SRC_REPO" --json body --template '{{.body}}' 2>/dev/null > release-note.txt || echo "No description" > release-note.txt
+
+                  if [ "$(ls -A sync-assets 2>/dev/null)" ]; then
+                    timeout 2m gh release create "$TAG" sync-assets/* --repo "$TGT_REPO" --title "$TITLE" --notes-file release-note.txt >/dev/null 2>&1 || echo "❌ 建立 Release 失敗"
+                  else
+                    timeout 2m gh release create "$TAG" --repo "$TGT_REPO" --title "$TITLE" --notes-file release-note.txt >/dev/null 2>&1 || echo "❌ 建立 Release 失敗"
+                  fi
+                  echo "🎉 最新 Release $TAG 搬運成功！"
+                  rm -rf sync-assets release-note.txt
+                fi
+              fi
+            else
+              echo "ℹ️ 來源專案無任何 Release 可同步。"
+            fi
+
+            echo "🏁 專案 $TGT_REPO 處理完畢！"
+            echo "----------------------------------------------------------"
+          done
+
+          echo "🏆 所有專案皆已低調同步完畢！"
