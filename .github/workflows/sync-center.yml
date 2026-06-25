@@ -68,7 +68,9 @@ jobs:
               ONE_YEAR_AGO=$(date -d "1 year ago" +%s)
               
               # 【核心魔術】用 tac 把清單反轉，讓機器人「從最舊的歷史」依序往最新檢查
-              echo "$RELEASE_JSON" | jq -c '.[]' | tac | while read -r row; do
+              #echo "$RELEASE_JSON" | jq -c '.[]' | tac | while read -r row; do
+              # 拿掉 | tac (最新往舊)
+              echo "$RELEASE_JSON" | jq -c '.[]' | while read -r row; do
                 TAG=$(echo "$row" | jq -r '.tagName')
                 PUB_DATE=$(echo "$row" | jq -r '.publishedAt')
                 
