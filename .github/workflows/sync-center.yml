@@ -1,8 +1,8 @@
-name: Ultimate Stealth Sync Center V4.1
+name: Ultimate Stealth Sync Center V4.2
 
 on:
   schedule:
-    - cron: '0 * * * *' # 每小時自動巡邏
+    - cron: '0 * * * *' # 自動巡邏
   workflow_dispatch: # 允許手動觸發
 
 concurrency:
@@ -98,7 +98,6 @@ jobs:
               TITLE=$(gh release view "$TAG" --repo "$SRC_REPO" --json name --template '{{.name}}' 2>/dev/null || echo "$TAG")
               gh release view "$TAG" --repo "$SRC_REPO" --json body --template '{{.body}}' 2>/dev/null > release-note.txt || echo "No description" > release-note.txt
 
-              # 🌟 修正點：用 if 包起來，就算失敗也不會讓整台 Actions 翻車
               if [ "$(ls -A sync-assets 2>/dev/null)" ]; then
                 if timeout 2m gh release create "$TAG" sync-assets/* --repo "$TGT_REPO" --title "$TITLE" --notes-file release-note.txt >/dev/null 2>&1; then
                   echo "  -> Release同步：成功建立 $TAG"
@@ -113,7 +112,8 @@ jobs:
                 fi
               fi
               
-              echo "  -> [安全限制] 本小時已達 1 個版本上限，其餘版本留待下小時處理。"
+              # 🌟 修正點：用「本次/下次」取代「本小時/下小時」
+              echo "  -> [安全限制] 本次已達 1 個版本上限，其餘版本留待下次處理。"
               rm -rf sync-assets release-note.txt
               break # 抓完這一個立刻踩煞車
             done <<< "$(echo "$RELEASE_JSON" | jq -c '.[]' 2>/dev/null)"
