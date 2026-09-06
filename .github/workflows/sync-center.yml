@@ -2,7 +2,7 @@ name: Ultimate Stealth Sync Center
 
 on:
   schedule:
-    - cron: '0 * * * *' # 自動巡邏
+    - cron: '17 */3 * * *' # 每 3 小時的第 17 分鐘自動巡邏一次
   workflow_dispatch: # 允許手動觸發
 
 concurrency:
