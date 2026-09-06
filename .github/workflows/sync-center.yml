@@ -1,4 +1,4 @@
-name: Ultimate Stealth Sync Center V4.5
+name: Ultimate Stealth Sync Center
 
 on:
   schedule:
@@ -29,7 +29,7 @@ jobs:
           fi
           echo "${{ secrets.YOUR_CUSTOM_PAT }}" | gh auth login --with-token
 
-          echo "=== 開始檢查所有 Fork 專案 ==="
+          echo "=== 開始檢查所有 Fork 專案 (V4.6) ==="
           REPOS=$(gh repo list --fork --limit 100 --json nameWithOwner --jq '.[].nameWithOwner')
 
           if [ -z "$REPOS" ]; then
@@ -46,8 +46,20 @@ jobs:
 
             echo "[專案] $TGT_REPO"
 
-            # 自動停用目標 Fork 專案的 Actions 功能，避免對方 Workflow 跑失敗或浪費額度
+            # A-1. 檢查原專案是否內建 Workflow 腳本
+            WF_INFO=$(gh api "repos/$TGT_REPO/actions/workflows" 2>/dev/null || echo "")
+            WF_COUNT=$(echo "$WF_INFO" | jq -r '.total_count // 0' 2>/dev/null || echo 0)
+
+            if [ "$WF_COUNT" -gt 0 ]; then
+              WF_NAMES=$(echo "$WF_INFO" | jq -r '.workflows[].name' | paste -sd ", " -)
+              echo "  -> 原專案 Workflow ($WF_COUNT 個): $WF_NAMES"
+            else
+              echo "  -> 原專案 Workflow: 無"
+            fi
+
+            # A-2. 自動停用目標 Fork 專案的 Actions 功能，避免對方 Workflow 跑失敗或浪費額度
             gh api -X PUT "repos/$TGT_REPO/actions/permissions" -F enabled=false >/dev/null 2>&1 || true
+            echo "  -> Actions 開關：已自動鎖定/停用"
 
             SRC_REPO=$(gh api "repos/$TGT_REPO" --jq '.parent.full_name' 2>/dev/null || echo "")
             if [ -z "$SRC_REPO" ] || [ "$SRC_REPO" = "null" ]; then
@@ -56,7 +68,7 @@ jobs:
               continue
             fi
 
-            # A. 後台分支同步（--force 強行平光歷史衝突）
+            # B. 後台分支同步（--force 強行平光歷史衝突）
             if gh repo sync "$TGT_REPO" --force >/dev/null 2>&1; then
               echo "  -> 程式碼同步：成功"
             else
@@ -65,7 +77,7 @@ jobs:
               continue
             fi
 
-            # B. 檢查並抓取 Release
+            # C. 檢查並抓取 Release
             RELEASE_JSON=$(gh release list --repo "$SRC_REPO" --limit 50 --json tagName,publishedAt 2>/dev/null || echo "[]")
 
             if [ -z "$RELEASE_JSON" ] || [ "$RELEASE_JSON" = "null" ] || [ "$RELEASE_JSON" = "[]" ]; then
