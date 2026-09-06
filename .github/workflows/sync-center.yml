@@ -1,4 +1,4 @@
-name: Ultimate Stealth Sync Center V4.3
+name: Ultimate Stealth Sync Center V4.4
 
 on:
   schedule:
@@ -42,7 +42,10 @@ jobs:
             if [ -z "$TGT_REPO" ]; then continue; fi
 
             echo "[專案] $TGT_REPO"
-            
+
+            # 🌟 自動停用目標 Fork 專案的 Actions 功能，避免對方 Workflow 跑失敗或浪費額度
+            gh api -X PUT "repos/$TGT_REPO/actions/permissions" -F enabled=false >/dev/null 2>&1 || true
+
             SRC_REPO=$(gh api "repos/$TGT_REPO" --jq '.parent.full_name' 2>/dev/null || echo "")
             if [ -z "$SRC_REPO" ] || [ "$SRC_REPO" = "null" ]; then
               echo "  -> 找不到原作者倉庫資訊，跳過。"
@@ -50,7 +53,7 @@ jobs:
               continue
             fi
 
-            # A. 後台分支同步（加入 --force 強行平光歷史衝突）
+            # A. 後台分支同步（--force 強行平光歷史衝突）
             if gh repo sync "$TGT_REPO" --force >/dev/null 2>&1; then
               echo "  -> 程式碼同步：成功"
             else
@@ -61,43 +64,43 @@ jobs:
 
             # B. 檢查並抓取 Release
             RELEASE_JSON=$(gh release list --repo "$SRC_REPO" --limit 50 --json tagName,publishedAt 2>/dev/null || echo "[]")
-            
+
             if [ -z "$RELEASE_JSON" ] || [ "$RELEASE_JSON" = "null" ] || [ "$RELEASE_JSON" = "[]" ]; then
               echo "  -> Release狀態：原作者從未發布任何 Release"
               echo "------------------------------------------"
               continue
             fi
-            
+
             ONE_YEAR_AGO=$(date -d "1 year ago" +%s)
             HAS_NEW_RELEASE=false
 
             while read -r row; do
               if [ -z "$row" ]; then continue; fi
-              
+
               TAG=$(echo "$row" | jq -r '.tagName')
               PUB_DATE=$(echo "$row" | jq -r '.publishedAt')
-              
+
               # 1. 過濾時間：超過一年的不要
               PUB_SEC=$(date -d "$PUB_DATE" +%s 2>/dev/null || echo 0)
               if [ "$PUB_SEC" -lt "$ONE_YEAR_AGO" ]; then
                 continue
               fi
-              
+
               # 2. 檢查自己是不是有了
               if gh release view "$TAG" --repo "$TGT_REPO" >/dev/null 2>&1; then
                 continue
               fi
-              
+
               # 3. 發現未同步版本
               echo "  -> 發現未同步版本：$TAG (發布時間: $PUB_DATE)"
               HAS_NEW_RELEASE=true
-              
+
               rm -rf sync-assets && mkdir -p sync-assets
-              
+
               if ! timeout 2m gh release download "$TAG" --repo "$SRC_REPO" --dir sync-assets >/dev/null 2>&1; then
                 echo "  -> [提示] 下載附件超時，僅同步文字公告"
               fi
-              
+
               TITLE=$(gh release view "$TAG" --repo "$SRC_REPO" --json name --template '{{.name}}' 2>/dev/null || echo "$TAG")
               gh release view "$TAG" --repo "$SRC_REPO" --json body --template '{{.body}}' 2>/dev/null > release-note.txt || echo "No description" > release-note.txt
 
@@ -114,7 +117,7 @@ jobs:
                   echo "  -> Release同步：失敗 (可能因網路、權限或該版本已有同名標籤)"
                 fi
               fi
-              
+
               echo "  -> [安全限制] 本次已達 1 個版本上限，其餘版本留待下次處理。"
               rm -rf sync-assets release-note.txt
               break # 抓完這一個立刻踩煞車
@@ -129,6 +132,7 @@ jobs:
 
           echo "=== 所有專案全自動巡邏完畢 ==="
 
+      # 防護步驟：自動防止 60 天無 Commit 被 GitHub 官方關閉排程
       - name: Keepalive Workflow
         uses: gautamkrishnar/keepalive-workflow@v1
         with:
