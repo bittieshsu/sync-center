@@ -1,4 +1,4 @@
-name: Ultimate Stealth Sync Center V4.4
+name: Ultimate Stealth Sync Center V4.5
 
 on:
   schedule:
@@ -10,13 +10,16 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write # 授權寫入，確保 Keepalive 與 Release 順利運作
+  contents: write # 授權寫入，確保 Commit 與 Release 順利運作
 
 jobs:
   auto-sync:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Stealth Auto-Sync
         run: |
           # 1. 驗證並登入 GitHub CLI
@@ -43,7 +46,7 @@ jobs:
 
             echo "[專案] $TGT_REPO"
 
-            # 🌟 自動停用目標 Fork 專案的 Actions 功能，避免對方 Workflow 跑失敗或浪費額度
+            # 自動停用目標 Fork 專案的 Actions 功能，避免對方 Workflow 跑失敗或浪費額度
             gh api -X PUT "repos/$TGT_REPO/actions/permissions" -F enabled=false >/dev/null 2>&1 || true
 
             SRC_REPO=$(gh api "repos/$TGT_REPO" --jq '.parent.full_name' 2>/dev/null || echo "")
@@ -132,8 +135,10 @@ jobs:
 
           echo "=== 所有專案全自動巡邏完畢 ==="
 
-      # 防護步驟：自動防止 60 天無 Commit 被 GitHub 官方關閉排程
+      # 防護步驟：使用個人身分送出原生空 Commit，完全不需要第三方 Actions
       - name: Keepalive Workflow
-        uses: gautamkrishnar/keepalive-workflow@v1
-        with:
-          gh_token: ${{ secrets.YOUR_CUSTOM_PAT }}
+        run: |
+          git config --global user.name "bittieshsu"
+          git config --global user.email "bittieshsu@users.noreply.github.com"
+          git commit --allow-empty -m "chore: maintenance sync-center heartbeat" || true
+          git push || true
