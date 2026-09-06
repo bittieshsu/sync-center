@@ -48,7 +48,7 @@ jobs:
             fi
 
             # A. 後台分支同步
-            if gh repo sync "$TGT_REPO" >/dev/null 2>&1; then
+            if gh repo sync "$TGT_REPO" --force >/dev/null 2>&1; then
               echo "  -> 程式碼同步：成功"
             else
               echo "  -> 程式碼同步：失敗（可能有衝突或分支不同），跳過。"
