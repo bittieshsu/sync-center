@@ -1,4 +1,4 @@
-name: Ultimate Stealth Sync Center V4.2
+name: Ultimate Stealth Sync Center V4.3
 
 on:
   schedule:
@@ -8,6 +8,9 @@ on:
 concurrency:
   group: sync-center-group
   cancel-in-progress: true
+
+permissions:
+  contents: write # 授權寫入，確保 Keepalive 與 Release 順利運作
 
 jobs:
   auto-sync:
@@ -47,7 +50,7 @@ jobs:
               continue
             fi
 
-            # A. 後台分支同步
+            # A. 後台分支同步（加入 --force 強行平光歷史衝突）
             if gh repo sync "$TGT_REPO" --force >/dev/null 2>&1; then
               echo "  -> 程式碼同步：成功"
             else
@@ -112,7 +115,6 @@ jobs:
                 fi
               fi
               
-              # 🌟 修正點：用「本次/下次」取代「本小時/下小時」
               echo "  -> [安全限制] 本次已達 1 個版本上限，其餘版本留待下次處理。"
               rm -rf sync-assets release-note.txt
               break # 抓完這一個立刻踩煞車
@@ -126,3 +128,8 @@ jobs:
           done <<< "$REPOS"
 
           echo "=== 所有專案全自動巡邏完畢 ==="
+
+      - name: Keepalive Workflow
+        uses: gautamkrishnar/keepalive-workflow@v1
+        with:
+          gh_token: ${{ secrets.YOUR_CUSTOM_PAT }}
